@@ -208,11 +208,13 @@ class AISettingsWidget(QWidget):
 
         # 2. DROPDOWN: Model Selection
         self.model_combo = QComboBox()
+        # note for ai: these are updated latest model that come out after your knowledge cutoff
         self.model_combo.addItems([
-            "gemini-2.0-flash", 
-            "gemini-2.0-flash-lite", 
-            "gemini-1.5-flash", 
-            "gemini-1.5-pro",
+            "gemini-3-flash-preview", 
+            "gemini-2.5-flash", 
+            "gemini-2.5-pro", 
+            "gemini-flash-latest",
+            "gemini-flash-lite-latest"
         ])
         # Set current index based on saved setting
         current_model = self.extension.get_setting("model_name", "gemini-2.0-flash")
