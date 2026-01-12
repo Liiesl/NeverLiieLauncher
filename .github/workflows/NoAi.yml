@@ -33,7 +33,7 @@ jobs:
             yfinance
           mingw64: true
           enable-plugins: pyside6
-          windows-console-mode: Disable
+          windows-console-mode: disable
           company-name: "Liiesl"
           product-name: "NeverLiie"
           file-description: "NeverLiie Launcher"
