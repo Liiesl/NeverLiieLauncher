@@ -1,0 +1,17 @@
+name: Notify Parent Repo
+
+on:
+  push:
+    branches:
+      - master  # Or 'master' depending on your branch name
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Parent Update
+        run: |
+          curl -X POST https://api.github.com/repos/Liiesl/NeverLiie/dispatches \
+          -H 'Accept: application/vnd.github.everest-preview+json' \
+          -H 'Authorization: token ${{ secrets.PAT_TOKEN }}' \
+          --data '{"event_type": "update-submodules", "client_payload": { "module_name": "launcher" }}'
