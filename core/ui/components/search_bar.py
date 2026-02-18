@@ -1,9 +1,10 @@
 # core/ui/components/search_bar.py
 import os
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QLineEdit
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel
 from PySide6.QtCore import Qt, Signal, QEvent
 from PySide6.QtGui import QPixmap, QPainter, QColor, QIcon
 from ..theme import THEME
+from .ghosting_text_edit import GhostingTextEdit
 
 class SearchBar(QFrame):
     text_changed = Signal(str)
@@ -39,7 +40,7 @@ class SearchBar(QFrame):
         self._load_svg_icon(self.search_icon_lbl, svg_path, THEME['subtext'])
 
         # Input Field
-        self.search_input = QLineEdit()
+        self.search_input = GhostingTextEdit()
         self.search_input.setPlaceholderText("Search apps, files, commands...")
         self.search_input.installEventFilter(self)
         self.search_input.textEdited.connect(self.text_changed.emit)
@@ -70,7 +71,7 @@ class SearchBar(QFrame):
                 background: {THEME['surface']}; padding: 4px 8px; border-radius: 6px;
             }}
 
-            QLineEdit {{
+            QTextEdit {{
                 background: transparent; color: {THEME['text']};
                 border: none; font-size: 20px; font-weight: 500;
                 selection-background-color: {THEME['accent']}; selection-color: {THEME['bg']};
