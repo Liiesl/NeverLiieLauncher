@@ -3,6 +3,7 @@ import os
 import json
 import subprocess
 import ctypes
+import threading
 from api.types import ResultItem, Action
 from .lnk_parser import resolve_lnk
 
@@ -10,8 +11,18 @@ class AppIndexer:
     def __init__(self):
         self.apps = []
         self.alias_registry = {}
+        self.lock = threading.Lock()
+        
+        # Path for the cache file
+        self.cache_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app_index_cache.json")
+        
         self.load_aliases()
-        self.refresh_index()
+        
+        # 1. Load from cache immediately (Instant startup)
+        self.load_cache()
+        
+        # 2. Refresh from disk in background (Updates index)
+        threading.Thread(target=self.refresh_index, daemon=True).start()
 
     def load_aliases(self):
         try:
@@ -27,88 +38,119 @@ class AppIndexer:
         except Exception as e:
             print(f"[System Apps] Error loading aliases: {e}")
 
+    def load_cache(self):
+        """Loads apps from JSON to ensure 0ms startup delay."""
+        if not os.path.exists(self.cache_path):
+            return
+
+        try:
+            with open(self.cache_path, 'r', encoding='utf-8') as f:
+                cached_data = json.load(f)
+                with self.lock:
+                    self.apps = cached_data
+            print(f"[System Apps] Loaded {len(self.apps)} apps from cache.")
+        except Exception as e:
+            print(f"[System Apps] Cache load failed: {e}")
+
+    def save_cache(self):
+        try:
+            with open(self.cache_path, 'w', encoding='utf-8') as f:
+                json.dump(self.apps, f)
+        except Exception as e:
+            print(f"[System Apps] Cache save failed: {e}")
+
     def refresh_index(self):
         target_map = {}  # exe_path.lower() -> app_data
         
-        search_dirs = [
+        # 1. Recursive Directories (Start Menu only)
+        start_menu_dirs = [
             os.path.join(os.environ.get("APPDATA", ""), r"Microsoft\Windows\Start Menu\Programs"),
             os.path.join(os.environ.get("PROGRAMDATA", ""), r"Microsoft\Windows\Start Menu\Programs"),
-            os.path.join(os.environ.get("LOCALAPPDATA", ""), r"Programs"),
         ]
 
+        # 2. Flat Directories (PATH) - Only scan top level, do not recurse
+        path_dirs = []
         path_env = os.environ.get("PATH", "")
         for p in path_env.split(os.pathsep):
-            if p and os.path.exists(p):
-                search_dirs.append(p)
+            # Optimization: Skip Windows system folders to avoid junk (dlls, etc)
+            # Users usually search for 'calc', not 'svchost'
+            p_lower = p.lower()
+            if "windows\\system32" in p_lower or "windows\\winsxs" in p_lower:
+                continue
+            if p and os.path.isdir(p): # FIX: Ensure it is a directory
+                path_dirs.append(p)
 
         valid_extensions = {".exe", ".lnk"}
-        ignore_names = {"uninstall", "readme", "help", "website", "update", "installer", "setup"}
+        ignore_names = {"uninstall", "readme", "help", "website", "update", "installer", "setup", "eula"}
 
-        for directory in search_dirs:
-            if not directory or not os.path.exists(directory):
-                continue
-            
+        # Helper to process a file
+        def process_file(root, filename):
             try:
-                is_start_menu = "Start Menu" in directory
+                name, ext = os.path.splitext(filename)
+                ext = ext.lower()
+                if ext not in valid_extensions:
+                    return
                 
-                if is_start_menu:
-                    walker = os.walk(directory)
-                else:
-                    try:
-                        files = os.listdir(directory)
-                        walker = [(directory, [], files)]
-                    except PermissionError:
-                        continue
+                lower_name = name.lower()
+                if any(bad in lower_name for bad in ignore_names):
+                    return
+                
+                full_path = os.path.normpath(os.path.join(root, filename))
+                
+                # Check if it exists (sometimes dead shortcuts remain)
+                if not os.path.exists(full_path):
+                    return
 
-                for root, _, files in walker:
-                    for filename in files:
-                        try:
-                            name, ext = os.path.splitext(filename)
-                            ext = ext.lower()
-                            if ext not in valid_extensions:
-                                continue
-                            
-                            lower_name = name.lower()
-                            if any(bad in lower_name for bad in ignore_names):
-                                continue
-                            
-                            full_path = os.path.normpath(os.path.join(root, filename))
-                            clean_name = name.replace(" - Shortcut", "")
-                            
-                            # Resolve target for deduplication
-                            if ext == ".lnk":
-                                resolved = resolve_lnk(full_path)
-                                target_path = resolved if resolved else full_path
-                            else:
-                                target_path = full_path
-                            
-                            target_key = target_path.lower()
-                            
-                            existing = target_map.get(target_key)
-                            
-                            # Prefer shortcuts (better display names)
-                            should_add = (
-                                existing is None or
-                                (ext == ".lnk" and not existing["is_shortcut"])
-                            )
-                            
-                            if should_add:
-                                target_map[target_key] = {
-                                    "name": clean_name,
-                                    "path": full_path,      # Launch path (.lnk or .exe)
-                                    "target": target_path,  # Actual .exe for icon/alias matching
-                                    "lower_name": clean_name.lower(),
-                                    "is_shortcut": ext == ".lnk"
-                                }
-                        except Exception:
-                            continue
-                            
-            except Exception as e:
-                print(f"[System Apps] Error scanning {directory}: {e}")
+                clean_name = name.replace(" - Shortcut", "")
+                
+                if ext == ".lnk":
+                    resolved = resolve_lnk(full_path)
+                    target_path = resolved if resolved else full_path
+                else:
+                    target_path = full_path
+                
+                target_key = target_path.lower()
+                existing = target_map.get(target_key)
+                
+                # Prefer shortcuts over raw exes (better naming)
+                should_add = (
+                    existing is None or
+                    (ext == ".lnk" and not existing["is_shortcut"])
+                )
+                
+                if should_add:
+                    target_map[target_key] = {
+                        "name": clean_name,
+                        "path": full_path,      
+                        "target": target_path,
+                        "lower_name": clean_name.lower(),
+                        "is_shortcut": ext == ".lnk"
+                    }
+            except Exception:
+                pass
+
+        # Scan Start Menus (Recursive)
+        for directory in start_menu_dirs:
+            if not os.path.exists(directory): continue
+            for root, _, files in os.walk(directory):
+                for filename in files:
+                    process_file(root, filename)
+
+        # Scan PATH (Flat - faster)
+        for directory in path_dirs:
+            try:
+                # LISTDIR is much faster than walk for flat scanning
+                files = os.listdir(directory)
+                for filename in files:
+                    process_file(directory, filename)
+            except (PermissionError, OSError):
                 continue
 
-        self.apps = list(target_map.values())
-        print(f"[System Apps] Indexed {len(self.apps)} applications")
+        with self.lock:
+            self.apps = list(target_map.values())
+        
+        print(f"[System Apps] Index refreshed: {len(self.apps)} apps found.")
+        self.save_cache()
 
     def search(self, query):
         if not query:
@@ -117,7 +159,7 @@ class AppIndexer:
         results = []
         query_lower = query.lower()
         
-        # Alias scoring
+        # Alias scoring (Fast enough to keep on main thread)
         alias_targets = {}
         for alias_key, target_name in self.alias_registry.items():
             ratio = len(query) / len(alias_key)
@@ -130,7 +172,11 @@ class AppIndexer:
             if target_name not in alias_targets or fuzzy_score > alias_targets[target_name]:
                 alias_targets[target_name] = fuzzy_score
 
-        for app in self.apps:
+        # Use local reference for thread safety
+        with self.lock:
+            current_apps = self.apps
+
+        for app in current_apps:
             score = 0
             
             # Match by name
@@ -143,7 +189,7 @@ class AppIndexer:
                 if app['is_shortcut']:
                     score += 50
             
-            # Match by alias (check both name and target exe)
+            # Match by alias
             target_lower = app.get('target', '').lower()
             for target_part, alias_score in alias_targets.items():
                 if target_part in app['lower_name'] or target_part in target_lower:
