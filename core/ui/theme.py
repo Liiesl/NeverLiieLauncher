@@ -2,16 +2,18 @@
 from PySide6.QtGui import QColor, QPainter, QPen, QIcon, QPixmap
 from PySide6.QtCore import Qt
 
+# qt color is AARRGGBB
 THEME = {
-    "bg": "#232324",
-    "mantle": "#2E2E30",
-    "surface": "#38394B",
+    "bg": "#70000000",
+    "mantle": "#402E2E30",
+    "surface": "#703E3E40",
     "text": "#cdd6f4",
     "subtext": "#a6adc8",
     "accent": "#89b4fa",
     "highlight": "#45475a",
     "border": "#45475a",
-    "red": "#f38ba8"
+    "red": "#f38ba8",
+    "peach": "#fab387"
 }
 
 def create_app_icon():

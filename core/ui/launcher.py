@@ -2,7 +2,7 @@
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QFrame, QGraphicsDropShadowEffect)
 from PySide6.QtCore import (Qt, QTimer, QPropertyAnimation, QEasingCurve, 
                             Signal, Slot, QObject, QRect, QEvent)
-from PySide6.QtGui import QColor, QAction, QKeySequence
+from PySide6.QtGui import QColor, QAction, QKeySequence, QPalette, QPainter
 
 from .theme import THEME
 from .components.search_bar import SearchBar
@@ -11,6 +11,37 @@ from .components.footer import Footer
 from .components.command_menu import CommandMenu
 
 import time
+import ctypes
+from ctypes import wintypes
+
+# Windows API
+class MARGINS(ctypes.Structure):
+    _fields_ = [("cxLeftWidth", wintypes.INT), ("cxRightWidth", wintypes.INT),
+                ("cyTopHeight", wintypes.INT), ("cyBottomHeight", wintypes.INT)]
+
+user32 = ctypes.WinDLL("user32")
+dwmapi = ctypes.WinDLL("dwmapi")
+
+# Constants
+GWL_STYLE = -16 
+WS_CAPTION = 0x00C00000
+WS_THICKFRAME = 0x00040000
+WS_POPUP = 0x80000000
+DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+DWMWA_SYSTEMBACKDROP_TYPE = 38
+DWMWA_WINDOW_CORNER_PREFERENCE = 33
+DWMSBT_MAINWINDOW = 3
+DWMWCP_ROUND = 2
+SWP_FRAMECHANGED = 0x0020
+SWP_NOMOVE = 0x0002
+SWP_NOSIZE = 0x0001
+SWP_NOZORDER = 0x0004
+SWP_NOACTIVATE = 0x0010
+
+def safe_cast_to_long(value):
+    value = value & 0xFFFFFFFF
+    return value - 0x100000000 if value & 0x80000000 else value
+
 
 class Profiler:
     def __init__(self, name):
@@ -34,7 +65,7 @@ class LauncherWindow(QWidget):
     VISUAL_WIDTH = 800
     VISUAL_COMPACT_HEIGHT = 80 
     MAX_VISIBLE_ITEMS = 6
-    WINDOW_MARGIN = 50 
+    WINDOW_MARGIN = 0 
     ROW_HEIGHT = 64
     
     def __init__(self, core_app):
@@ -59,7 +90,7 @@ class LauncherWindow(QWidget):
         # Animations
         self.anim_geometry = QPropertyAnimation(self, b"geometry")
         self.anim_geometry.setEasingCurve(QEasingCurve.OutExpo) 
-        self.anim_geometry.setDuration(250)
+        self.anim_geometry.setDuration(300)
         self.anim_geometry.finished.connect(self.on_animation_finished)
 
         # Search debouncing
@@ -69,11 +100,21 @@ class LauncherWindow(QWidget):
         self.search_timer.timeout.connect(self.perform_search)
 
     def setup_layout(self):
-        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
+        # EXACT setup from prototype - NO FramelessWindowHint
+        self.setWindowFlags(Qt.WindowStaysOnTopHint | Qt.Tool)
         self.setAttribute(Qt.WA_TranslucentBackground)
+        
+        # Start invisible for border-flash workaround
+        self.setWindowOpacity(0.0)
+        
+        palette = self.palette()
+        palette.setColor(QPalette.ColorRole.Window, QColor(0, 0, 0, 0))
+        self.setPalette(palette)
         
         self.compact_h_total = self.VISUAL_COMPACT_HEIGHT + (self.WINDOW_MARGIN * 2)
         total_w = self.VISUAL_WIDTH + (self.WINDOW_MARGIN * 2)
+        # --- THE FIX ---
+        self.setFixedWidth(total_w) # Force the window to stay at 800px + margins
         self.resize(total_w, self.compact_h_total)
 
         # Main Layout
@@ -116,19 +157,12 @@ class LauncherWindow(QWidget):
         self.inner_layout.addWidget(self.result_container)
         self.inner_layout.addWidget(self.footer)
         
-        # --- Command Menu (Overlay) ---
+        # Command Menu
         self.command_menu = CommandMenu(self.container)
         self.command_menu.hide()
         self.command_menu.action_triggered.connect(self.execute_action)
 
         self.main_layout.addWidget(self.container)
-        
-        # Shadow
-        self.shadow = QGraphicsDropShadowEffect(self)
-        self.shadow.setBlurRadius(30)
-        self.shadow.setColor(QColor(0, 0, 0, 150))
-        self.shadow.setOffset(0, 10)
-        self.container.setGraphicsEffect(self.shadow)
 
     def setup_connections(self):
         # Search Bar
@@ -156,12 +190,56 @@ class LauncherWindow(QWidget):
         self.shortcut_actions.triggered.connect(self.toggle_command_menu)
         self.addAction(self.shortcut_actions)
 
+    def paintEvent(self, event):
+        # Clear background for Mica - EXACT from prototype
+        painter = QPainter(self)
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
+        painter.fillRect(self.rect(), Qt.GlobalColor.transparent)
+
     def showEvent(self, event):
+        # EXACT from prototype - ensure opacity 0 before showing
+        self.setWindowOpacity(0.0)
+        
         current_y = self.y()
         current_h = self.height()
         expansion_diff = current_h - self.compact_h_total
         self.base_y_anchor = current_y + (expansion_diff * 0.15)
         super().showEvent(event)
+        
+        # Apply Mica workaround after showing
+        QTimer.singleShot(0, self._apply_mica)
+
+    def _apply_mica(self):
+        hwnd = self.winId()
+        
+        # Apply DWM Mica
+        dwmapi.DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, 
+                                     ctypes.byref(wintypes.DWORD(1)), 4)
+        dwmapi.DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, 
+                                     ctypes.byref(wintypes.DWORD(DWMSBT_MAINWINDOW)), 4)
+        dwmapi.DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE,
+                                     ctypes.byref(wintypes.DWORD(DWMWCP_ROUND)), 4)
+        dwmapi.DwmExtendFrameIntoClientArea(hwnd, ctypes.byref(MARGINS(-1, -1, -1, -1)))
+        
+        # Border flash workaround - EXACT from prototype
+        style = user32.GetWindowLongW(hwnd, GWL_STYLE)
+        style = (style | WS_CAPTION | WS_THICKFRAME) & ~WS_POPUP
+        user32.SetWindowLongW(hwnd, GWL_STYLE, safe_cast_to_long(style))
+        user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, 
+                           SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED)
+        
+        # Schedule border removal - EXACT timing from prototype
+        QTimer.singleShot(10, lambda: self._remove_borders(hwnd))
+        
+    def _remove_borders(self, hwnd):
+        style = user32.GetWindowLongW(hwnd, GWL_STYLE)
+        style = (style & ~(WS_CAPTION | WS_THICKFRAME)) | WS_POPUP
+        user32.SetWindowLongW(hwnd, GWL_STYLE, safe_cast_to_long(style))
+        user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0,
+                           SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED)
+        
+        # Reveal window - EXACT from prototype
+        self.setWindowOpacity(1.0)
 
     def resizeEvent(self, event):
         # Position Command Menu at bottom right, just above footer
@@ -224,12 +302,10 @@ class LauncherWindow(QWidget):
             return
 
         stripped = text.strip()
-        lower_text = stripped.lower()
-        allow_short = {"ai"} 
-        should_search = len(stripped) >= 3 or lower_text in allow_short
+        should_search = len(stripped) > 0
 
         if not should_search:
-            status = "Start typing..." if len(stripped) == 0 else f"Type {3 - len(stripped)} more chars..."
+            status = "Start typing..."
             self.footer.set_text(status)
             self.result_container.update_results([])
             self.animate_resize(0, 0)
@@ -427,7 +503,6 @@ class LauncherWindow(QWidget):
             if target_h == self.compact_h_total: self.on_animation_finished()
             return
 
-        self.shadow.setEnabled(False)
         if self.base_y_anchor is None:
             self.base_y_anchor = current.y()
 
@@ -443,7 +518,6 @@ class LauncherWindow(QWidget):
         self.anim_geometry.start()
 
     def on_animation_finished(self):
-        self.shadow.setEnabled(True)
         if self.geometry().height() <= self.compact_h_total + 2:
             self.separator.hide()
             self.result_container.hide()

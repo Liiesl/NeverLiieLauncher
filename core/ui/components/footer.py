@@ -23,14 +23,14 @@ class Footer(QFrame):
     def show_border(self, visible):
         color = THEME['surface'] if visible else "transparent"
         self.setStyleSheet(f"""
-            QFrame#Footer {{ 
-                background: transparent; 
-                border-top: 1px solid {color}; 
+            QFrame#Footer {{
+                background: #30000000;
+                border-top: 1px solid {color};
             }}
-            QLabel#FooterLabel {{ 
-                color: {THEME['subtext']}; 
-                font-size: 12px; 
-                font-weight: 600; 
+            QLabel#FooterLabel {{
+                color: {THEME['subtext']};
+                font-size: 12px;
+                font-weight: 600;
             }}
         """)
 
