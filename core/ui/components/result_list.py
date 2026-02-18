@@ -1,8 +1,8 @@
 # core/ui/components/result_list.py
 from PySide6.QtWidgets import (QStackedWidget, QListWidget, QListWidgetItem, 
-                               QStyledItemDelegate, QStyle, QFileIconProvider, 
-                               QAbstractItemView, QSizePolicy)
-from PySide6.QtCore import Qt, QSize, QRect, QFileInfo, Signal
+                                QStyledItemDelegate, QStyle, QFileIconProvider, 
+                                QAbstractItemView, QSizePolicy)
+from PySide6.QtCore import Qt, QSize, QRect, QFileInfo, Signal, QPropertyAnimation, QEasingCurve, Property, QTimer
 from PySide6.QtGui import QColor, QFont, QPainter, QBrush, QPen, QIcon, QPixmap
 import os
 
@@ -32,21 +32,8 @@ class ResultDelegate(QStyledItemDelegate):
             return
 
         full_rect = option.rect
-        # Create the "Card" effect with margins
         card_rect = full_rect.adjusted(self.h_margin, self.v_margin, -self.h_margin, -self.v_margin)
         
-        # --- 1. Background ---
-        if option.state & QStyle.State_Selected:
-            painter.setBrush(QColor(THEME["surface"]))
-            painter.setPen(Qt.NoPen)
-            painter.drawRoundedRect(card_rect, 12, 12)
-            
-            # Accent Pill (Left side strip)
-            pill_rect = QRect(card_rect.left() + 4, card_rect.top() + 12, 4, card_rect.height() - 24)
-            painter.setBrush(QColor(THEME["accent"]))
-            painter.drawRoundedRect(pill_rect, 2, 2)
-
-        # If it's a custom widget item, we don't paint text
         if item_data.widget_factory:
             painter.restore()
             return
@@ -101,6 +88,60 @@ class ResultDelegate(QStyledItemDelegate):
         
         painter.restore()
 
+
+class AnimatedListWidget(QListWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._highlight_y = 0
+        self._highlight_height = 52
+        self._highlight_width = 0
+        self._highlight_visible = False
+        self._h_margin = 12
+        self._v_margin = 6
+    
+    def hide_highlight(self):
+        self._highlight_visible = False
+        self.viewport().update()
+    
+    def highlight_y(self):
+        return self._highlight_y
+    
+    def set_highlight_y(self, value):
+        self._highlight_y = value
+        self.viewport().update()
+    
+    highlightY = Property(float, highlight_y, set_highlight_y)
+    
+    def paintEvent(self, event):
+        painter = QPainter(self.viewport())
+        painter.setRenderHint(QPainter.Antialiasing)
+        
+        if self._highlight_visible and self._highlight_width > 0:
+            rect = QRect(self._h_margin, int(self._highlight_y), 
+                        self._highlight_width, self._highlight_height)
+            painter.setBrush(QColor(THEME["surface"]))
+            painter.setPen(Qt.NoPen)
+            painter.drawRoundedRect(rect, 12, 12)
+            
+            pill_rect = QRect(rect.left() + 4, rect.top() + 12, 4, rect.height() - 24)
+            painter.setBrush(QColor(THEME["accent"]))
+            painter.drawRoundedRect(pill_rect, 2, 2)
+        
+        painter.end()
+        super().paintEvent(event)
+
+
+class SelectionHighlight:
+    def __init__(self, list_widget):
+        self.list_widget = list_widget
+        self._h_margin = 12
+        self._v_margin = 6
+        self._current_y = 0
+        self.animation = QPropertyAnimation(list_widget, b"highlightY", list_widget)
+        self.animation.setDuration(150)
+        self.animation.setEasingCurve(QEasingCurve.InOutCubic)
+
+
 class ResultListContainer(QStackedWidget):
     item_activated = Signal(object) 
     selection_changed = Signal(object)
@@ -111,23 +152,25 @@ class ResultListContainer(QStackedWidget):
         self.setup_style()
         
     def setup_list(self):
-        self.result_list = QListWidget()
+        self.result_list = AnimatedListWidget()
         self.delegate = ResultDelegate(self.result_list)
         self.result_list.setItemDelegate(self.delegate)
-        # Ensure scroll mode is per pixel for smooth scrolling
         self.result_list.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
         self.result_list.setUniformItemSizes(False)
         self.result_list.setFocusPolicy(Qt.NoFocus)
         self.result_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        # Use Ignored to prevent the list from forcing the window size, 
-        # allowing the Delegate to calculate width based on the visible container
         self.result_list.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
         
         self.result_list.itemActivated.connect(self._on_activate)
         self.result_list.currentItemChanged.connect(self._on_change)
+        self.result_list.verticalScrollBar().valueChanged.connect(self._on_scroll)
         
         self.addWidget(self.result_list)
         self.icon_provider = QFileIconProvider()
+        
+        self.selection_highlight = SelectionHighlight(self.result_list)
+        self._pending_highlight_row = None
+        self._scroll_animation_active = False
         
     def setup_style(self):
         self.setStyleSheet(f"""
@@ -148,6 +191,8 @@ class ResultListContainer(QStackedWidget):
 
     def update_results(self, results):
         self.remove_custom_widget()
+        self.result_list.hide_highlight()
+        self.result_list._highlight_y = 0
         
         image_extensions = {'.svg', '.png', '.jpg', '.jpeg', '.ico', '.bmp'}
 
@@ -164,8 +209,6 @@ class ResultListContainer(QStackedWidget):
                 pixmap = qicon.pixmap(28, 28) 
                 self.delegate.pixmap_cache[path] = pixmap
 
-        current_row = self.result_list.currentRow()
-        
         self.result_list.blockSignals(True)
         self.result_list.setUpdatesEnabled(False)
         self.result_list.viewport().setUpdatesEnabled(False)
@@ -193,18 +236,16 @@ class ResultListContainer(QStackedWidget):
                 widget = item_data.widget_factory()
                 self.result_list.setItemWidget(l_item, widget)
         
-        if current_row >= 0 and current_row < len(results):
-            self.result_list.setCurrentRow(current_row)
-        else:
-            self.result_list.setCurrentRow(0)
+        self.result_list.setCurrentRow(0)
+        self._pending_highlight_row = 0
             
         self.result_list.viewport().setUpdatesEnabled(True)
         self.result_list.setUpdatesEnabled(True)
         self.result_list.blockSignals(False)
 
         if self.result_list.currentItem():
-             self._on_change(self.result_list.currentItem(), None)
-            
+            self._on_change(self.result_list.currentItem(), None)
+           
         return total_height
 
     def show_custom_widget(self, widget):
@@ -232,6 +273,42 @@ class ResultListContainer(QStackedWidget):
         new_idx = max(0, min(curr + direction, count - 1))
         self.result_list.setCurrentRow(new_idx)
 
+    def _update_highlight_position(self, row, animate=True):
+        if row < 0 or row >= self.result_list.count():
+            self.result_list.hide_highlight()
+            return
+        
+        item = self.result_list.item(row)
+        if not item:
+            return
+        
+        rect = self.result_list.visualItemRect(item)
+        viewport_h = self.result_list.viewport().height()
+        
+        if not rect.isValid() or rect.top() < -100 or rect.bottom() > viewport_h + 100:
+            self.result_list.hide_highlight()
+            return
+        
+        row_height = item.sizeHint().height()
+        card_height = row_height - (self.selection_highlight._v_margin * 2)
+        card_width = rect.width() - (self.selection_highlight._h_margin * 2)
+        target_y = rect.top() + self.selection_highlight._v_margin
+        
+        old_y = self.result_list._highlight_y
+        
+        self.result_list._highlight_height = card_height
+        self.result_list._highlight_width = card_width
+        self.result_list._highlight_visible = True
+        
+        if animate and old_y > 0 and abs(old_y - target_y) > 1:
+            self.selection_highlight.animation.stop()
+            self.selection_highlight.animation.setStartValue(old_y)
+            self.selection_highlight.animation.setEndValue(target_y)
+            self.selection_highlight.animation.start()
+        else:
+            self.result_list._highlight_y = target_y
+            self.result_list.viewport().update()
+
     def get_current_data(self):
         item = self.result_list.currentItem()
         if item:
@@ -246,3 +323,15 @@ class ResultListContainer(QStackedWidget):
         if current:
             data = current.data(Qt.UserRole)
             self.selection_changed.emit(data)
+            row = self.result_list.row(current)
+            QTimer.singleShot(0, lambda: self._update_highlight_position(row, animate=(previous is not None)))
+    
+    def _on_scroll(self):
+        if self._scroll_animation_active:
+            return
+        current = self.result_list.currentItem()
+        if current:
+            row = self.result_list.row(current)
+            self._scroll_animation_active = True
+            self._update_highlight_position(row, animate=False)
+            self._scroll_animation_active = False
