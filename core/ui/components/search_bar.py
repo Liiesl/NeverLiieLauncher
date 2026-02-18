@@ -1,6 +1,8 @@
 # core/ui/components/search_bar.py
+import os
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QLineEdit
 from PySide6.QtCore import Qt, Signal, QEvent
+from PySide6.QtGui import QPixmap, QPainter, QColor, QIcon
 from ..theme import THEME
 
 class SearchBar(QFrame):
@@ -30,8 +32,11 @@ class SearchBar(QFrame):
         self.back_btn.mousePressEvent = lambda e: self.back_clicked.emit()
 
         # Search Icon
-        self.search_icon_lbl = QLabel("🔎")
+        self.search_icon_lbl = QLabel()
         self.search_icon_lbl.setObjectName("SearchIcon")
+        self.search_icon_lbl.setFixedSize(24, 24)
+        svg_path = os.path.join(os.path.dirname(__file__), "..", "..", "..", "assets", "search.svg")
+        self._load_svg_icon(self.search_icon_lbl, svg_path, THEME['subtext'])
 
         # Input Field
         self.search_input = QLineEdit()
@@ -53,7 +58,6 @@ class SearchBar(QFrame):
     def setup_style(self):
         self.setStyleSheet(f"""
             QFrame {{ background: transparent; }}
-            QLabel#SearchIcon {{ font-size: 20px; color: {THEME['subtext']}; }}
             
             QLabel#BackButton {{ 
                 font-size: 24px; color: {THEME['text']}; font-weight: bold;
@@ -72,6 +76,15 @@ class SearchBar(QFrame):
                 selection-background-color: {THEME['accent']}; selection-color: {THEME['bg']};
             }}
         """)
+
+    def _load_svg_icon(self, label, svg_path, color):
+        icon = QIcon(svg_path)
+        pixmap = icon.pixmap(24, 24)
+        painter = QPainter(pixmap)
+        painter.setCompositionMode(QPainter.CompositionMode_SourceIn)
+        painter.fillRect(pixmap.rect(), QColor(color))
+        painter.end()
+        label.setPixmap(pixmap)
 
     def set_mode_root(self):
         self.back_btn.hide()

@@ -15,6 +15,12 @@ class Footer(QFrame):
         self.label.setObjectName("FooterLabel")
         layout.addWidget(self.label)
         
+        layout.addStretch()
+        
+        self.version_label = QLabel("neverliie v0.3.11")
+        self.version_label.setObjectName("FooterVersionLabel")
+        layout.addWidget(self.version_label)
+        
         self.setup_style()
 
     def set_text(self, text):
@@ -28,6 +34,11 @@ class Footer(QFrame):
                 border-top: 1px solid {color};
             }}
             QLabel#FooterLabel {{
+                color: {THEME['subtext']};
+                font-size: 12px;
+                font-weight: 600;
+            }}
+            QLabel#FooterVersionLabel {{
                 color: {THEME['subtext']};
                 font-size: 12px;
                 font-weight: 600;
