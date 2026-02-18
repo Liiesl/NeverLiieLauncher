@@ -98,6 +98,13 @@ class AnimatedListWidget(QListWidget):
         self._highlight_visible = False
         self._h_margin = 12
         self._v_margin = 6
+        self.setMouseTracking(True)
+    
+    def mouseMoveEvent(self, event):
+        item = self.itemAt(event.pos())
+        if item and item != self.currentItem():
+            self.setCurrentItem(item)
+        super().mouseMoveEvent(event)
     
     def hide_highlight(self):
         self._highlight_visible = False

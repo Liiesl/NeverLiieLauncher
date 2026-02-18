@@ -8,6 +8,7 @@ import time
 import threading
 from api.extension import Extension
 from api.context import ExtensionContext
+from .crash_logger import log_exception
 
 class ExtensionManager:
     def __init__(self, core_app):
@@ -140,20 +141,18 @@ class ExtensionManager:
             return False
 
     def _safe_query(self, ext, text):
-        """
-        Runs inside the thread. 
-        """
         start_time = time.perf_counter()
         results = []
         try:
-            results = ext.on_input(text) or [] # Ensure list
-        except Exception as e:
-            print(f"[Error] Extension '{ext.id}' crashed: {e}")
+            results = ext.on_input(text) or []
+        except Exception:
+            import sys
+            log_exception(f"extension_query:{ext.id}", sys.exc_info())
+            print(f"[Error] Extension '{ext.id}' crashed - see crash log")
             results = []
         finally:
             end_time = time.perf_counter()
             elapsed_ms = (end_time - start_time) * 1000
-            # Optional: Log slow extensions
             if elapsed_ms > 200:
                 print(f"[{ext.id}] Slow: {elapsed_ms:.2f} ms")
 
@@ -190,10 +189,17 @@ class ExtensionManager:
                     current_results.sort(key=lambda x: x.score, reverse=True)
                     results_snapshot = list(current_results)
                 
-                callback_fn(results_snapshot, current_qid)
+                try:
+                    callback_fn(results_snapshot, current_qid)
+                except Exception:
+                    import sys
+                    log_exception("qt_callback_from_thread", sys.exc_info())
+                    print(f"[Error] Qt callback crashed - see crash log")
                 
-            except Exception as e:
-                print(f"Task error: {e}")
+            except Exception:
+                import sys
+                log_exception("task_callback", sys.exc_info())
+                print(f"[Error] Task callback crashed - see crash log")
 
         # 4. Submit tasks
         for ext in self.extensions:
