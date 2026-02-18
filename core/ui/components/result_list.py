@@ -14,9 +14,6 @@ class ResultDelegate(QStyledItemDelegate):
         self.h_margin = 12
         self.v_margin = 6
         self.row_height = 64
-        
-        # We don't load icons here anymore. 
-        # We expect the Container to inject a 'cache' dictionary.
         self.pixmap_cache = {} 
 
     def sizeHint(self, option, index):
@@ -26,8 +23,6 @@ class ResultDelegate(QStyledItemDelegate):
         return QSize(option.rect.width(), self.row_height)
 
     def paint(self, painter, option, index):
-        # No Profiler needed here anymore once fixed, but keep it for verification if you want
-        
         painter.save()
         painter.setRenderHint(QPainter.Antialiasing)
         
@@ -37,6 +32,7 @@ class ResultDelegate(QStyledItemDelegate):
             return
 
         full_rect = option.rect
+        # Create the "Card" effect with margins
         card_rect = full_rect.adjusted(self.h_margin, self.v_margin, -self.h_margin, -self.v_margin)
         
         # --- 1. Background ---
@@ -45,11 +41,12 @@ class ResultDelegate(QStyledItemDelegate):
             painter.setPen(Qt.NoPen)
             painter.drawRoundedRect(card_rect, 12, 12)
             
-            # Accent Pill
+            # Accent Pill (Left side strip)
             pill_rect = QRect(card_rect.left() + 4, card_rect.top() + 12, 4, card_rect.height() - 24)
             painter.setBrush(QColor(THEME["accent"]))
             painter.drawRoundedRect(pill_rect, 2, 2)
 
+        # If it's a custom widget item, we don't paint text
         if item_data.widget_factory:
             painter.restore()
             return
@@ -61,43 +58,52 @@ class ResultDelegate(QStyledItemDelegate):
         
         if item_data.icon_path and item_data.icon_path in self.pixmap_cache:
             pixmap = self.pixmap_cache[item_data.icon_path]
-            # Draw the cached pixmap directly
             painter.drawPixmap(icon_x, icon_y, pixmap)
         else:
-            # Fallback circle if no icon
             painter.setBrush(QColor(THEME["surface"]))
             painter.setPen(Qt.NoPen)
             painter.drawEllipse(icon_x, icon_y, icon_size, icon_size)
 
         # --- 3. Text ---
+        # Define where text starts
         text_left = icon_x + icon_size + 15
-        text_width = card_rect.right() - text_left - 15
         
-        # Title
-        title_rect = QRect(text_left, card_rect.top() + 10, text_width, 22)
+        # Define strict available width:
+        # Card Right Edge - Start Position - Right Padding (15px)
+        avail_width = card_rect.right() - text_left - 15
+        
+        if avail_width <= 0:
+            painter.restore()
+            return
+
+        # -- Title --
+        title_rect = QRect(text_left, card_rect.top() + 10, avail_width, 22)
         painter.setFont(QFont("Segoe UI", 11, QFont.Bold))
         painter.setPen(QColor(THEME["text"]))
 
-        # FIXED: Use fontMetrics for elision
+        # 1. Clean text (remove newlines that break drawing)
+        clean_title = item_data.name.replace("\n", " ").strip()
+        # 2. Calculate Elision
         fm_title = painter.fontMetrics()
-        elided_title = fm_title.elidedText(item_data.name, Qt.ElideRight, title_rect.width())
-        painter.drawText(title_rect, Qt.AlignLeft | Qt.AlignVCenter, elided_title)
+        elided_title = fm_title.elidedText(clean_title, Qt.ElideRight, avail_width)
+        # 3. Draw with SingleLine flag to prevent wrapping issues
+        painter.drawText(title_rect, Qt.AlignLeft | Qt.AlignVCenter | Qt.TextSingleLine, elided_title)
         
-        # Description
-        desc_rect = QRect(text_left, title_rect.bottom(), text_width, 18)
+        # -- Description --
+        desc_rect = QRect(text_left, title_rect.bottom(), avail_width, 18)
         painter.setFont(QFont("Segoe UI", 9))
         painter.setPen(QColor(THEME["subtext"] if not (option.state & QStyle.State_Selected) else "#bac2de"))
 
-        # FIXED: Use fontMetrics for elision
+        clean_desc = item_data.description.replace("\n", " ").strip()
         fm_desc = painter.fontMetrics()
-        elided_desc = fm_desc.elidedText(item_data.description, Qt.ElideRight, desc_rect.width())
-        painter.drawText(desc_rect, Qt.AlignLeft | Qt.AlignVCenter, elided_desc)
+        elided_desc = fm_desc.elidedText(clean_desc, Qt.ElideRight, avail_width)
+        painter.drawText(desc_rect, Qt.AlignLeft | Qt.AlignVCenter | Qt.TextSingleLine, elided_desc)
         
         painter.restore()
 
 class ResultListContainer(QStackedWidget):
-    item_activated = Signal(object) # Emits the item data object
-    selection_changed = Signal(object) # Emits the item data object
+    item_activated = Signal(object) 
+    selection_changed = Signal(object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -108,10 +114,13 @@ class ResultListContainer(QStackedWidget):
         self.result_list = QListWidget()
         self.delegate = ResultDelegate(self.result_list)
         self.result_list.setItemDelegate(self.delegate)
+        # Ensure scroll mode is per pixel for smooth scrolling
         self.result_list.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
         self.result_list.setUniformItemSizes(False)
         self.result_list.setFocusPolicy(Qt.NoFocus)
         self.result_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        # Use Ignored to prevent the list from forcing the window size, 
+        # allowing the Delegate to calculate width based on the visible container
         self.result_list.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
         
         self.result_list.itemActivated.connect(self._on_activate)
@@ -140,8 +149,6 @@ class ResultListContainer(QStackedWidget):
     def update_results(self, results):
         self.remove_custom_widget()
         
-        # We need to distinguish between "System Icons" (like .exe) 
-        # and "Image Files" (like .svg, .png) that we want to render directly.
         image_extensions = {'.svg', '.png', '.jpg', '.jpeg', '.ico', '.bmp'}
 
         for item in results:
@@ -150,29 +157,22 @@ class ResultListContainer(QStackedWidget):
                 _, ext = os.path.splitext(path)
                 
                 if ext.lower() in image_extensions:
-                    # 1. It's an image/vector -> Load content directly
-                    # QIcon(path) will use QtSvg (if imported) to render the vector
                     qicon = QIcon(path)
                 else:
-                    # 2. It's an app/file -> Ask OS for associated icon
                     qicon = self.icon_provider.icon(QFileInfo(path))
                 
-                # Create the cached pixmap
                 pixmap = qicon.pixmap(28, 28) 
                 self.delegate.pixmap_cache[path] = pixmap
 
         current_row = self.result_list.currentRow()
         
-        # 1. Block signals so footer/selection logic doesn't freak out during clear()
         self.result_list.blockSignals(True)
-        # 2. Disable viewport updates to prevent painting an empty white box
         self.result_list.setUpdatesEnabled(False)
         self.result_list.viewport().setUpdatesEnabled(False)
         
         self.result_list.clear()
         
         if not results:
-            # Re-enable if empty
             self.result_list.blockSignals(False)
             self.result_list.viewport().setUpdatesEnabled(True)
             self.result_list.setUpdatesEnabled(True)
@@ -193,18 +193,15 @@ class ResultListContainer(QStackedWidget):
                 widget = item_data.widget_factory()
                 self.result_list.setItemWidget(l_item, widget)
         
-        # Restore selection
         if current_row >= 0 and current_row < len(results):
             self.result_list.setCurrentRow(current_row)
         else:
             self.result_list.setCurrentRow(0)
             
-        # Re-enable everything
         self.result_list.viewport().setUpdatesEnabled(True)
         self.result_list.setUpdatesEnabled(True)
         self.result_list.blockSignals(False)
 
-        # Force a single selection event so the footer updates to the correct item
         if self.result_list.currentItem():
              self._on_change(self.result_list.currentItem(), None)
             
