@@ -54,46 +54,118 @@ class LayoutEngine:
                     current_block_y += BLOCK_SPACING
                     continue
 
+                # 2a. Determine Column Widths
+                # Heuristic: Cap the max weight of a cell to avoid long paragraphs crushing other columns.
+                # A cell generally shouldn't demand more than 50% of the view for calculation purposes.
+                max_cell_weight = max(100, int(avail_width * 0.5))
+                
                 col_widths = [0] * col_count
+                
+                def measure_cell_weight(text):
+                    # We only care about the width up to the cap for ratio calculations
+                    # Use a slice for performance on massive text blocks
+                    w = fm.horizontalAdvance(text[:1000]) if len(text) > 1000 else fm.horizontalAdvance(text)
+                    return min(w, max_cell_weight) + (TABLE_CELL_PADDING * 3)
+
                 for i, h in enumerate(block.table_headers):
                     if i < col_count:
-                        w = fm.horizontalAdvance(h) + (TABLE_CELL_PADDING * 3)
-                        col_widths[i] = max(col_widths[i], w)
+                        col_widths[i] = max(col_widths[i], measure_cell_weight(h))
+                        
                 for row in block.table_rows:
                     for i, cell in enumerate(row):
                         if i < col_count:
-                            w = fm.horizontalAdvance(cell) + (TABLE_CELL_PADDING * 3)
-                            col_widths[i] = max(col_widths[i], w)
+                            col_widths[i] = max(col_widths[i], measure_cell_weight(cell))
 
                 total_desired = sum(col_widths)
-                if total_desired > avail_width:
-                    scale = avail_width / total_desired
-                    col_widths = [int(w * scale) for w in col_widths]
+                if total_desired < 1: total_desired = 1
+
+                # Scale to fill available width (expand or contract)
+                scale = avail_width / total_desired
+                col_widths = [int(w * scale) for w in col_widths]
                 
                 block.table_col_widths = col_widths 
-                row_height = fm.height() + (TABLE_CELL_PADDING * 2)
-                
-                def process_row(cells, y_offset):
-                    x_cursor = message.x_pos + BUBBLE_PADDING + indent_pixels
-                    for c_idx, text in enumerate(cells):
-                        if c_idx >= len(col_widths): break
-                        cw = col_widths[c_idx]
-                        align = 'left'
-                        if c_idx < len(block.table_align): align = block.table_align[c_idx]
-                        text_w = fm.horizontalAdvance(text)
-                        text_x = x_cursor + TABLE_CELL_PADDING
-                        if align == 'center': text_x = x_cursor + (cw - text_w) / 2
-                        elif align == 'right': text_x = x_cursor + cw - TABLE_CELL_PADDING - text_w
-                        if text_x < x_cursor: text_x = x_cursor
-                        rect = QRect(int(text_x), int(y_offset + TABLE_CELL_PADDING), int(text_w), int(fm.height()))
-                        block.layout_lines.append(LayoutLine(text, rect, fm, 0))
-                        x_cursor += cw
+                block.table_row_heights = []
 
-                process_row(block.table_headers, current_block_y)
-                current_block_y += row_height
+                font = self.styles.get_font(block.type)
+                
+                # 2b. Helper to process a row (Calculate height & Create lines)
+                def layout_row(cells, y_start):
+                    row_max_h = 0
+                    
+                    # Store data to create LayoutLines after we know the max height
+                    cell_data_list = []
+                    
+                    x_c = message.x_pos + BUBBLE_PADDING + indent_pixels
+                    
+                    # Pass 1: Measure and Wrap
+                    for c_i, cell_text in enumerate(cells):
+                        if c_i >= len(col_widths): break
+                        cw = col_widths[c_i]
+                        avail_cell_w = cw - (TABLE_CELL_PADDING * 2)
+                        # Prevent crash/infinite loop on extremely narrow cols
+                        if avail_cell_w < 10: avail_cell_w = 10
+                        
+                        # Use QTextLayout for wrapping
+                        tl = QTextLayout(cell_text, font)
+                        opt = QTextOption()
+                        opt.setWrapMode(QTextOption.WrapAtWordBoundaryOrAnywhere)
+                        tl.setTextOption(opt)
+                        tl.beginLayout()
+                        
+                        lines_info = []
+                        while True:
+                            line = tl.createLine()
+                            if not line.isValid(): break
+                            line.setLineWidth(avail_cell_w)
+                            lines_info.append((line.textStart(), line.textLength(), line.naturalTextWidth()))
+                        tl.endLayout()
+
+                        num_lines = len(lines_info)
+                        if num_lines == 0: num_lines = 1 
+                        
+                        cell_h = num_lines * fm.height() + (TABLE_CELL_PADDING * 2)
+                        if cell_h > row_max_h: row_max_h = cell_h
+                        
+                        cell_data_list.append((c_i, lines_info, x_c, cw, cell_text))
+                        x_c += cw
+                    
+                    if row_max_h == 0: row_max_h = fm.height() + (TABLE_CELL_PADDING * 2)
+                    block.table_row_heights.append(row_max_h)
+
+                    # Pass 2: Generate LayoutLines
+                    for c_i, lines_info, x_base, cw, full_text in cell_data_list:
+                        align = 'left'
+                        if c_i < len(block.table_align): align = block.table_align[c_i]
+                        
+                        cur_line_y = y_start + TABLE_CELL_PADDING
+                        
+                        if not lines_info: continue
+
+                        for start, length, line_w in lines_info:
+                            seg_text = full_text[start : start + length]
+                            
+                            # Alignment X
+                            t_x = x_base + TABLE_CELL_PADDING
+                            if align == 'center': 
+                                t_x = x_base + (cw - line_w) / 2
+                            elif align == 'right': 
+                                t_x = x_base + cw - TABLE_CELL_PADDING - line_w
+                            
+                            rect = QRect(int(t_x), int(cur_line_y), int(line_w), int(fm.height()))
+                            block.layout_lines.append(LayoutLine(seg_text, rect, fm, 0))
+                            
+                            cur_line_y += fm.height()
+                    
+                    return row_max_h
+
+                # Layout Header
+                h_height = layout_row(block.table_headers, current_block_y)
+                current_block_y += h_height
+                
+                # Layout Rows
                 for row in block.table_rows:
-                    process_row(row, current_block_y)
-                    current_block_y += row_height
+                    r_height = layout_row(row, current_block_y)
+                    current_block_y += r_height
 
                 block.height = (current_block_y - block.y_pos)
                 current_block_y += BLOCK_SPACING
@@ -195,14 +267,9 @@ class LayoutEngine:
                         current_block_y += line.height() + LINE_SPACING
                     text_layout.endLayout()
 
-                # --- FIX: Moved inside 'if bench' block ---
                 if bench:
                     elapsed = (time.perf_counter() - start) * 1000
                     block_timer.record_time(elapsed)
-                    
-                    # --- DEBUG: Print blocks causing lag ---
-                    if elapsed > 10.0:
-                        print(f"SLOW BLOCK ({elapsed:.2f}ms): [{block.type.name}] '{text[:50]}...'")
              
             block.height = (current_block_y - block.y_pos)
             current_block_y += BLOCK_SPACING

@@ -7,8 +7,8 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QLabel, QScrollArea,
                                QComboBox, QCheckBox, QHBoxLayout, QButtonGroup, QToolButton)
 from PySide6.QtCore import Qt, Signal, QThread, Slot, QSize
 
-from google import genai
-from google.genai import types, errors
+# CHANGED: Import Mistral instead of Google GenAI
+from mistralai import Mistral
 
 from api.extension import Extension
 from api.types import Action
@@ -17,7 +17,7 @@ from .markdown_engine.widget import ChatCanvas
 from .markdown_engine.constants import THEME
 
 # --- WORKER THREAD ---
-class GeminiWorker(QThread):
+class MistralWorker(QThread):
     response_ready = Signal(str)
     error_occurred = Signal(str)
 
@@ -35,47 +35,45 @@ class GeminiWorker(QThread):
             return
 
         try:
-            contents = []
+            messages = []
             
-            # Inject Persona/System Instruction if exists (Simulated via first message or config)
+            # 1. Inject Persona/System Instruction
             if self.persona_instruction:
-                 # Note: Gemini 1.5+ supports system_instruction in config, 
-                 # but for simplicity we assume standard message structure or config injection
-                 pass 
+                messages.append({
+                    "role": "system",
+                    "content": self.persona_instruction
+                })
 
+            # 2. Format History
+            # Mistral expects 'user' and 'assistant' roles. 
+            # Our internal history uses 'model', so we map it.
             for msg in self.history:
-                role = 'model' if msg['role'] == 'model' else 'user'
-                contents.append(types.Content(
-                    role=role,
-                    parts=[types.Part.from_text(text=msg['text'])]
-                ))
+                role = 'assistant' if msg['role'] == 'model' else 'user'
+                messages.append({
+                    "role": role,
+                    "content": msg['text']
+                })
 
-            contents.append(types.Content(
-                role='user',
-                parts=[types.Part.from_text(text=self.user_input)]
-            ))
+            # 3. Add Current Input
+            messages.append({
+                "role": "user",
+                "content": self.user_input
+            })
             
-            # config setup
-            gen_config = types.GenerateContentConfig(
-                temperature=0.7,
-                system_instruction=self.persona_instruction if self.persona_instruction else None
-            )
-
-            response = self.client.models.generate_content(
+            # 4. Call API
+            response = self.client.chat.complete(
                 model=self.model_name,
-                contents=contents,
-                config=gen_config
+                messages=messages,
+                temperature=0.7
             )
             
-            if response.text:
-                self.response_ready.emit(response.text)
+            if response.choices and response.choices[0].message.content:
+                self.response_ready.emit(response.choices[0].message.content)
             else:
                 self.error_occurred.emit("No text returned from API.")
 
-        except errors.APIError as e:
-            self.error_occurred.emit(f"API Error: {e.message}")
         except Exception as e:
-            self.error_occurred.emit(f"System Error: {str(e)}")
+            self.error_occurred.emit(f"API Error: {str(e)}")
 
 # --- UI COMPONENTS ---
 
@@ -150,7 +148,8 @@ class ChatView(QWidget):
         
         history_to_send = self.history if self.extension.get_setting("enable_history", True) else []
 
-        self.worker = GeminiWorker(self.extension.client, self.extension.model_name, history_to_send, text, persona)
+        # CHANGED: Instantiate MistralWorker
+        self.worker = MistralWorker(self.extension.client, self.extension.model_name, history_to_send, text, persona)
         self.worker.response_ready.connect(self.on_response)
         self.worker.error_occurred.connect(self.on_error)
         self.worker.start()
@@ -202,22 +201,24 @@ class AISettingsWidget(QWidget):
         # 1. INPUT FIELD: API Key
         self.api_input = QLineEdit()
         self.api_input.setEchoMode(QLineEdit.Password)
-        self.api_input.setPlaceholderText("Enter Google Gemini API Key")
+        self.api_input.setPlaceholderText("Enter Mistral API Key") # CHANGED Placeholder
         self.api_input.setText(self.extension.get_setting("api_key", ""))
-        self.add_form_row(layout, "API Key", "Required for Gemini Access", self.api_input)
+        self.add_form_row(layout, "API Key", "Required for Mistral Access", self.api_input)
 
         # 2. DROPDOWN: Model Selection
         self.model_combo = QComboBox()
-        # note for ai: these are updated latest model that come out after your knowledge cutoff
+        # CHANGED: Mistral Models
         self.model_combo.addItems([
-            "gemini-3-flash-preview", 
-            "gemini-2.5-flash", 
-            "gemini-2.5-pro", 
-            "gemini-flash-latest",
-            "gemini-flash-lite-latest"
+            "mistral-large-latest",
+            "mistral-medium",
+            "mistral-small",
+            "open-mistral-7b",
+            "open-mixtral-8x7b",
+            "open-mixtral-8x22b",
+            "codestral-latest"
         ])
         # Set current index based on saved setting
-        current_model = self.extension.get_setting("model_name", "gemini-2.0-flash")
+        current_model = self.extension.get_setting("model_name", "mistral-large-latest")
         index = self.model_combo.findText(current_model)
         if index >= 0:
             self.model_combo.setCurrentIndex(index)
@@ -380,10 +381,10 @@ class AIExtension(Extension):
     def __init__(self, core_app):
         super().__init__(core_app)
         self.name = "AI Chat"
-        self.description = "Chat with Google Gemini (Markdown Supported)"
+        self.description = "Chat with Mistral AI (Markdown Supported)" # CHANGED Description
         self.has_greeted = False
         self.client = None
-        self.model_name = "gemini-2.0-flash"
+        self.model_name = "mistral-large-latest" # CHANGED Default Model
         
         # Reference to the current visual widget
         self.current_view = None
@@ -433,12 +434,13 @@ class AIExtension(Extension):
 
     def reload_client(self):
         api_key = self.get_setting("api_key")
-        self.model_name = self.get_setting("model_name", "gemini-2.0-flash")
+        self.model_name = self.get_setting("model_name", "mistral-large-latest")
         
         if api_key:
             try:
-                self.client = genai.Client(api_key=api_key)
-                print("[AI Extension] Client loaded successfully.")
+                # CHANGED: Initialize Mistral Client
+                self.client = Mistral(api_key=api_key)
+                print("[AI Extension] Mistral Client loaded successfully.")
             except Exception as e:
                 print(f"[AI Extension] Init Error: {e}")
                 self.client = None

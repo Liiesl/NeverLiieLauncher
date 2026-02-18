@@ -50,7 +50,8 @@ class TextBlock:
         # --- NEW FIELDS FOR COPY BUTTON ---
         'copy_rect',       # QRect of the button (relative to message)
         'is_copy_hovered', # Boolean for hover state
-        'show_copied_text' # Boolean to show "Copied!" instead of "Copy"
+        'show_copied_text', # Boolean to show "Copied!" instead of "Copy"
+        'table_row_heights' # List of heights for each row in the table
     )
 
     def __init__(self, text, block_type=BlockType.PARAGRAPH, level=1):
@@ -71,6 +72,7 @@ class TextBlock:
         self.table_rows = []    
         self.table_align = []   
         self.table_col_widths = []
+        self.table_row_heights = []
 
         # Layout cache
         self.layout_lines = [] 

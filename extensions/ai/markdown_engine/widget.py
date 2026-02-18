@@ -254,16 +254,41 @@ class ChatCanvas(QWidget):
         # 3. Find Line
         line_idx = -1
         closest_dist = 99999
+        
+        # --- FIXED: Table Support ---
+        # Instead of breaking on the first Y match, collect all lines on this Y plane (e.g. table cells)
+        row_candidates = []
+        
         for i, line in enumerate(block.layout_lines):
             line_rect_y = msg.y_pos + line.rect.y()
-            if line_rect_y <= pos.y() <= line_rect_y + line.rect.height() + LINE_SPACING:
-                line_idx = i
-                break
-            # Fallback to closest vertical line
-            dist = min(abs(pos.y() - line_rect_y), abs(pos.y() - (line_rect_y + line.rect.height())))
-            if dist < closest_dist:
-                closest_dist = dist
-                line_idx = i
+            line_h = line.rect.height()
+            
+            # Check overlap
+            if line_rect_y <= pos.y() <= line_rect_y + line_h + LINE_SPACING:
+                row_candidates.append(i)
+            
+            # Track closest (only used if no row_candidates found)
+            # This handles clicking in vertical padding between blocks or lines
+            if not row_candidates:
+                dist = min(abs(pos.y() - line_rect_y), abs(pos.y() - (line_rect_y + line_h)))
+                if dist < closest_dist:
+                    closest_dist = dist
+                    line_idx = i
+        
+        # If we found lines overlapping Y, find the one matching X
+        if row_candidates:
+            # Default to the right-most candidate if none match strictly
+            line_idx = row_candidates[-1] 
+            
+            for i in row_candidates:
+                line = block.layout_lines[i]
+                # line.rect.x() is absolute widget X coordinate
+                line_end_x = line.rect.x() + line.rect.width()
+                
+                # If cursor is to the left of this line's end, we pick it.
+                if pos.x() <= line_end_x:
+                    line_idx = i
+                    break
         
         if line_idx == -1: line_idx = 0
         
