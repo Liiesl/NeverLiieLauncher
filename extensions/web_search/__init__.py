@@ -24,12 +24,14 @@ from api.types import ResultItem, Action
 # --- Configuration Constants ---
 DEFAULT_ENGINES = {
     "google": {"name": "Google", "url": "https://www.google.com/search?q={}", "default_bang": "!g"},
+    "googleai" : {"name": "Google AI Mode", "url": "https://www.google.com/search?q={}&udm=50", "default_bang": "!gai"},
     "bing": {"name": "Bing", "url": "https://www.bing.com/search?q={}", "default_bang": "!b"},
     "duckduckgo": {"name": "DuckDuckGo", "url": "https://duckduckgo.com/?q={}", "default_bang": "!ddg"},
     "brave": {"name": "Brave Search", "url": "https://search.brave.com/search?q={}", "default_bang": "!br"},
     "yahoo": {"name": "Yahoo", "url": "https://search.yahoo.com/search?p={}", "default_bang": "!y"},
     "youtube": {"name": "YouTube", "url": "https://www.youtube.com/results?search_query={}", "default_bang": "!yt"},
     "wikipedia": {"name": "Wikipedia", "url": "https://en.wikipedia.org/wiki/Special:Search?search={}", "default_bang": "!w"},
+    "t3": {"name": "T3 chat", "url": "https://t3.chat/new?model=kimi-k2&q={}", "default_bang": "!t3"},
     "reddit": {"name": "Reddit", "url": "https://www.reddit.com/search/?q={}", "default_bang": "!r"},
     "github": {"name": "GitHub", "url": "https://github.com/search?q={}", "default_bang": "!gh"},
     "stackoverflow": {"name": "Stack Overflow", "url": "https://stackoverflow.com/search?q={}", "default_bang": "!so"},
