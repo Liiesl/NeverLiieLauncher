@@ -263,7 +263,7 @@ class App:
     def center_window(self):
         screen = self.qapp.primaryScreen().geometry()
         x = (screen.width() - self.window.width()) // 2
-        y = (screen.height() - self.window.height()) // 4
+        y = (screen.height() - self.window.height()) // 3
         self.window.move(x, y)
 
     def setup_tray(self):

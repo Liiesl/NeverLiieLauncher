@@ -127,7 +127,7 @@ class LauncherWindow(QWidget):
         self.container.setStyleSheet(f"""
             QFrame#Container {{
                 background-color: {THEME['bg']};
-                border-radius: 12px;
+                border-radius: 10px;
                 border: 1px solid {THEME['border']};
             }}
             QFrame#Separator {{
