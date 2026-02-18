@@ -6,3 +6,7 @@ extensions/clipboard/media/*
 extensions/clipboard/clipboard_history.db
 settings.json
 /prototype/
+*.crt 
+*.key
+*/timezone/*.json
+!*/timezone/zones.json
