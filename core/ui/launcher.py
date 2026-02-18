@@ -99,6 +99,14 @@ class LauncherWindow(QWidget):
         self.search_timer.setInterval(150)
         self.search_timer.timeout.connect(self.perform_search)
 
+        # Resize debouncing - prevents flicker when typing fast
+        self.resize_debounce_timer = QTimer(self)
+        self.resize_debounce_timer.setSingleShot(True)
+        self.resize_debounce_timer.setInterval(150)
+        self.resize_debounce_timer.timeout.connect(self._do_resize)
+        self._pending_item_count = 0
+        self._pending_content_height = 0
+
     def setup_layout(self):
         # EXACT setup from prototype - NO FramelessWindowHint
         self.setWindowFlags(Qt.WindowStaysOnTopHint | Qt.Tool)
@@ -308,7 +316,7 @@ class LauncherWindow(QWidget):
             status = "Start typing..."
             self.footer.set_text(status)
             self.result_container.update_results([])
-            self.animate_resize(0, 0)
+            self.schedule_resize(0, 0)
             self.search_timer.stop()
             return
 
@@ -316,6 +324,7 @@ class LauncherWindow(QWidget):
 
     def perform_search(self):
         if self.result_container.currentIndex() != 0: return
+        self.resize_debounce_timer.stop()
 
         text = self.search_bar.get_text()
         
@@ -329,24 +338,22 @@ class LauncherWindow(QWidget):
     @Slot(list, int, str)
     def handle_results(self, results, qid, query_text):
         if self.result_container.currentIndex() != 0: return
-        # Ensure we don't process stale results if the user typed fast
+        self.resize_debounce_timer.stop()
         if query_text != self.search_bar.get_text(): return
         
         with Profiler("Total Handle Results"):
             count = len(results)
             
             with Profiler("Update List Items"):
-                # This swaps the items. Since we didn't clear them in perform_search,
-                # the UI goes directly from [Old List] -> [New List]
                 content_height = self.result_container.update_results(results)
             
             if count == 0:
                 self.footer.set_text("No results found.")
-                self.animate_resize(0, 0)
+                self.schedule_resize(0, 0)
             else:
                 self.update_footer_info(self.result_container.get_current_data())
                 with Profiler("Setup Animation"):
-                    self.animate_resize(count, content_height)
+                    self.schedule_resize(count, content_height)
 
     def update_footer_info(self, item_data):
         if item_data and self.result_container.currentIndex() == 0:
@@ -522,3 +529,11 @@ class LauncherWindow(QWidget):
             self.separator.hide()
             self.result_container.hide()
             self.footer.show_border(False)
+
+    def schedule_resize(self, item_count, content_height):
+        self._pending_item_count = item_count
+        self._pending_content_height = content_height
+        self.resize_debounce_timer.start()
+
+    def _do_resize(self):
+        self.animate_resize(self._pending_item_count, self._pending_content_height)
